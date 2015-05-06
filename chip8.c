@@ -65,6 +65,10 @@ void read_mem (void) {
         if (i != 15) printf("R%d: %#04X - ", i, Chip8.V[i]);
         else         printf("R%d: %#04X\n", i, Chip8.V[i]);
     }
+    for (i=0; i<16; i++) {
+        printf("stack[%d]: %#04x ptr: %#04x\n", i, Chip8.stack[i], Chip8.stk_ptr);
+    }
+        
     printf("Index: %#04X\n", Chip8.I);
     usleep(50000);
 }
@@ -72,7 +76,7 @@ void read_mem (void) {
 int load_rom (char *filename) {
     char *source = NULL;
     FILE *file = fopen(filename, "rb");
-    int i;
+    size_t i;
 
     if (file != NULL) {
         if (fseek(file, 0L, SEEK_END) == 0) {
@@ -103,11 +107,18 @@ int load_rom (char *filename) {
 }
 
 int cycle (void) {
+    int i;
     Chip8.op = Chip8.mem[Chip8.pc] << 8 | Chip8.mem[Chip8.pc + 1];
     printf("Opcode received: %#04x\n", Chip8.op);
     switch (Chip8.op & 0xF000) {
         case 0x0000:
             switch (Chip8.op & 0x000F) {
+                case 0x0000:
+                    for (i=0; i<2048; i++)
+                        Chip8.gfx[i] = 0x0;
+                    Chip8.pc += 2;
+                    printf("Cleared screen\nMoved ahead to %#04x\n", Chip8.pc);
+                    break;
                 case 0x000E: //Returns from a subroutine
                     Chip8.stk_ptr--;
                     Chip8.pc = Chip8.stack[Chip8.stk_ptr];
@@ -119,32 +130,18 @@ int cycle (void) {
                     return 1;
             }
             break;
+        case 0x1000: //Jumps to address NNN
+            Chip8.pc = Chip8.op & 0x0FFF;
+            printf("Jumped to %#04x\n", Chip8.op & 0x0FFF);
+            break;
         case 0x2000: //Jump to subroutine at NNN
             Chip8.stack[Chip8.stk_ptr] = Chip8.pc;
             Chip8.stk_ptr++;
             printf("Jumping from %#04x to %#04x\n", Chip8.pc, Chip8.op & 0x0FFF);
             Chip8.pc = Chip8.op & 0x0FFF;
             break;
-        case 0x6000: //Sets VX to NN
-            Chip8.V[(Chip8.op & 0x0F00) >> 8] = Chip8.op & 0x00FF;
-            printf("Set V[%d] to %#04x\n", (Chip8.op & 0x0F00) >> 8, Chip8.op & 0x00FF);
-            Chip8.pc += 2;
-            printf("Moved ahead to: %#04x\n", Chip8.pc);
-            break;
-        case 0xA000: //Sets index to NNN
-            Chip8.I = Chip8.op & 0x0FFF;
-            printf("Index set to %#04x\n", Chip8.op & 0x0FFF);
-            Chip8.pc += 2;
-            printf("Moved ahead to: %#04x\n", Chip8.pc);
-            break;
-        case 0x7000: //Adds NN to VX
-            Chip8.V[(Chip8.op & 0x0F00) >> 8] += Chip8.op & 0x00FF;
-            Chip8.pc += 2;
-            printf("Added %#04x to V[%d]\n", Chip8.op & 0x00FF, (Chip8.op & 0x0F00) >> 8);
-            printf("Moved ahead to: %#04x\n", Chip8.pc);
-            break;
-        case 0x3000: //Skips the next instruction if VX == NX
-            if (Chip8.V[(Chip8.op & 0x0F00) >> 8] == Chip8.op & 0x00FF) {
+       case 0x3000: //Skips the next instruction if VX == NN
+            if (Chip8.V[(Chip8.op & 0x0F00) >> 8] == (Chip8.op & 0x00FF)) {
                 Chip8.pc += 4;
                 printf("V[%d] == %#04x, moving ahead 4\n", (Chip8.op & 0x0F00) >> 8, Chip8.op & 0x00FF);
             } else {
@@ -152,9 +149,128 @@ int cycle (void) {
                 printf("Moving ahead to %#04x\n", Chip8.pc);
             }
             break;
-        case 0x1000: //Jumps to address NNN
-            Chip8.pc = Chip8.op & 0x0FFF;
-            printf("Jumped to %#04x\n", Chip8.op & 0x0FFF);
+        case 0x4000: //Skips the next instruction if VX != NN
+            if (Chip8.V[(Chip8.op & 0x0F00) >> 8] != (Chip8.op & 0x00FF)) {
+                Chip8.pc += 4;
+                printf("V[%d] != %#04x, moving ahead 4\n", (Chip8.op & 0x0F00) >> 8, Chip8.op & 0x00FF);
+            } else {
+                Chip8.pc += 2;
+                printf("Moving ahead to %#04x\n", Chip8.pc);
+            }
+            break;
+        case 0x5000: //Skips the next instruction if VX == VY
+            if (Chip8.V[(Chip8.op & 0x0F00) >> 8] == (Chip8.op & 0x00F0) >> 4) {
+                Chip8.pc += 4;
+                printf("V[%d] == V[%d], moving ahead 4\n", (Chip8.op & 0x0F00) >> 8, (Chip8.op & 0x00F0) >> 4);
+            } else {
+                Chip8.pc += 2;
+                printf("Moving ahead to %#04x\n", Chip8.pc);
+            }
+            break;
+        case 0x6000: //Sets VX to NN
+            Chip8.V[(Chip8.op & 0x0F00) >> 8] = Chip8.op & 0x00FF;
+            printf("Set V[%d] to %#04x\n", (Chip8.op & 0x0F00) >> 8, Chip8.op & 0x00FF);
+            Chip8.pc += 2;
+            printf("Moved ahead to: %#04x\n", Chip8.pc);
+            break;
+        case 0x7000: //Adds NN to VX
+            Chip8.V[(Chip8.op & 0x0F00) >> 8] += Chip8.op & 0x00FF;
+            Chip8.pc += 2;
+            printf("Added %#04x to V[%d]\n", Chip8.op & 0x00FF, (Chip8.op & 0x0F00) >> 8); 
+            printf("Moved ahead to: %#04x\n", Chip8.pc);
+            break;
+        case 0x8000: //Register stuffs
+            switch (Chip8.op & 0x000F) {
+                case 0x0000: //Sets VX to the value of VY
+                    Chip8.V[(Chip8.op & 0x0F00) >> 8] = 
+                    Chip8.V[(Chip8.op & 0x00F0) >> 4];
+                    printf("V[%d] set to V[%d]\nMoved ahead to %#04x\n", (Chip8.op & 0x0F00) >> 8, (Chip8.op & 0x00F0) >> 4, Chip8.pc + 2);
+                    Chip8.pc += 2;
+                    break;
+                case 0x0001: //Sets VX to VX | VY
+                    Chip8.V[(Chip8.op & 0x0F00) >> 8] |=
+                    Chip8.V[(Chip8.op & 0x00F0) >> 4];
+                    printf("V[%d] or'd to V[%d]\nMoved ahead to %#04x\n", (Chip8.op & 0x0F00) >> 8, (Chip8.op & 0x00F0) >> 4, Chip8.pc + 2);
+                    Chip8.pc += 2;
+                    break;
+                case 0x0002: //Sets VX to VX & VY
+                    Chip8.V[(Chip8.op & 0x0F00) >> 8] &=
+                    Chip8.V[(Chip8.op & 0x00F0) >> 4];
+                    printf("V[%d] and'd to V[%d]\nMoved ahead to %#04x\n", (Chip8.op & 0x0F00) >> 8, (Chip8.op & 0x00F0) >> 4, Chip8.pc + 2);
+                    Chip8.pc += 2;
+                    break;
+                case 0x0003: //Sets VX to VX ^ VY
+                    Chip8.V[(Chip8.op & 0x0F00) >> 8] ^=
+                    Chip8.V[(Chip8.op & 0x00F0) >> 4];
+                    printf("V[%d] xor'd to V[%d]\nMoved ahead to %#04x\n", (Chip8.op & 0x0F00) >> 8, (Chip8.op & 0x00F0) >> 4, Chip8.pc + 2);
+                    Chip8.pc += 2;
+                    break;
+                case 0x0004: //Adds VY to VX - VF is set to 1 when there's a
+                             //carry and to 0 when there isn't
+                    if (Chip8.V[(Chip8.op & 0x00F0) >> 4] > 
+                                  (0xFF - (Chip8.V[(Chip8.op & 0x0F00) >> 8]))) {
+                        Chip8.V[0xF] = 1;
+                        printf("Carry flag set\n");
+                    } else {
+                        Chip8.V[0xF] = 0;
+                    }
+                    Chip8.V[(Chip8.op & 0x00F0) >> 4] +=
+                    Chip8.V[(Chip8.op & 0x0F00) >> 8];
+                    printf("Added V[%d] to V[%d]\n", Chip8.V[(Chip8.op & 0x00F0) >> 4],  Chip8.V[(Chip8.op & 0x0F00) >> 8]);
+                    Chip8.pc += 2;
+                    printf("Moved ahead to %#04x\n", Chip8.pc);
+                    break;
+                case 0x0005: //VY is subtracted from VX. VF is set to 0 when 
+                             //there's a borrow, and 1 when there isn't.
+                    if (Chip8.V[(Chip8.op & 0x00F0) >> 4] > 
+                                (0xFF - (Chip8.V[(Chip8.op & 0x0F00) >> 8]))) {
+                        Chip8.V[0xF] = 0;
+                        printf("Borrow flag set\n");
+                    } else {
+                        Chip8.V[0xF] = 1;
+                    }
+                    Chip8.V[(Chip8.op & 0x00F0) >> 4] -=
+                    Chip8.V[(Chip8.op & 0x0F00) >> 8];
+                    printf("subtracted V[%d] to V[%d]\n", Chip8.V[(Chip8.op & 0x00F0) >> 4],  Chip8.V[(Chip8.op & 0x0F00) >> 8]);
+                    Chip8.pc += 2;
+                    printf("Moved ahead to %#04x\n", Chip8.pc);
+                    break;
+                case 0x0006: //VF set to LSB, shift VX to the right by one
+                    Chip8.V[0xF] = Chip8.V[(Chip8.op & 0x0F00) >> 8] & 0x1;
+                    Chip8.V[(Chip8.op & 0x0F00) >> 8] >>= 1;
+                    Chip8.pc += 2;
+                    printf("Register V[%d] shifted right by one\n", (Chip8.op & 0x0F00) >> 8);
+                    break;
+                case 0x0007: //Set VX to VY minus VX. 
+                             //VF set to 0 when there's a borrow
+                    if (Chip8.V[(Chip8.op & 0x0F00) >> 8] >
+                                Chip8.V[(Chip8.op & 0x00F0) >> 4]) {
+                        Chip8.V[0xF] = 0;
+                    } else {
+                        Chip8.V[0xF] = 1;
+                    }
+                    Chip8.V[(Chip8.op & 0x0F00) >> 8] =
+                    Chip8.V[(Chip8.op & 0x0F00) >> 4] -
+                    Chip8.V[(Chip8.op & 0x0F00) >> 8];
+                    Chip8.pc += 2;
+                    printf("Set V[%d] to V[%d] - V[%d]\n", Chip8.V[(Chip8.op & 0x0F00) >> 8], Chip8.V[(Chip8.op & 0x0F00) >> 4], Chip8.V[(Chip8.op & 0x0F00) >> 8]);
+                    printf("Moved ahead to %#04x\n", Chip8.pc);
+                    break;
+                case 0x000E: //Shift VX left by one. VF set to MSB before shift
+                    Chip8.V[0xF] = Chip8.V[(Chip8.op & 0x0F00) >> 8] >> 7;
+                    Chip8.V[(Chip8.op & 0x0F00) >> 8] <<= 1;
+                    Chip8.pc += 2;
+                    printf("Shifted V[%d] left by one\nMoved ahead to %#04x\n", (Chip8.op & 0x0F00) >> 8, Chip8.pc);
+                    break;
+                default:
+                    printf("I don't know opcode %#04x, teach me!\n", Chip8.op);
+                    return 1;
+            }
+        case 0xA000: //Sets index to NNN
+            Chip8.I = Chip8.op & 0x0FFF;
+            printf("Index set to %#04x\n", Chip8.op & 0x0FFF);
+            Chip8.pc += 2;
+            printf("Moved ahead to: %#04x\n", Chip8.pc);
             break;
         case 0xD000:
         { //Draws sprites. If a pixel is flipped VX = 1
@@ -168,10 +284,9 @@ int cycle (void) {
 
             for (yl=0; yl<h; yl++) {
                 px = Chip8.mem[Chip8.I + yl];
-                printf("%#04x\n", px);
                 for (xl=0; xl<8; xl++) {
                     if ((px & (0x80 >> xl)) != 0) {
-                        if (Chip8.gfx[x+xl+((y+yl)*64)] == 1) {
+                        if (Chip8.gfx[(x+xl+((y+yl)*64))] == 1) {
                             Chip8.V[0xF] = 1;
                             printf("Collision detection\n");
                         }
@@ -196,6 +311,7 @@ int cycle (void) {
             printf("BEEP\n");
         --Chip8.sound_timer;
     }
+    return 0;
 }
 
 void render(void) {
@@ -210,15 +326,22 @@ void render(void) {
 }
 
 int main (int argc, char **argv) {
+    if (argc < 2) {
+        printf("Usage: %s example.c8\n", argv[0]);
+        return 1;
+    }
+
     initialize();
+
     if (load_rom(argv[1]) != 1) {
         while (1) {
             int last_time = 0;
             int current_time = SDL_GetTicks();
             if (current_time > last_time + 60) {
                 if (cycle() == 1) break;
-                read_mem();
-                render();
+//                read_mem();
+//  render();              
+                usleep(500000);
                 current_time = last_time;
             }
         }
